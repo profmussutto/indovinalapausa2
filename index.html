@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+ body{display:flex;justify-content:center;font-family:sans-serif;background:#fffef7;padding:10px;margin:0}
+ #app{max-width:820px;margin:auto;border:2px solid #222;border-radius:16px;padding:20px;background:white;width:100%;box-sizing:border-box}
+ #staff{width:100%;overflow:hidden;border:1px solid #eee;border-radius:8px}
+ #staff svg{width:100%!important}
+ #restGrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:15px 0}
+ .restBtn{padding:12px 6px;border-radius:10px;border:2px solid #222;background:white;font-weight:bold;cursor:pointer;text-align:center}
+ .restBtn small{display:block;font-weight:normal;font-size:11px}
+ .restBtn.sel{background:#ffcc00} .restBtn.ok{background:#b6f7b6!important} .restBtn.ko{background:#ffb3b3!important}
+ button{padding:12px;font-size:16px;border-radius:10px;border:none;font-weight:bold;cursor:pointer}
+ /* Schermo intero - tutta l'app */
+ #app:fullscreen{max-width:100%;width:100%;height:100%;border:none;border-radius:0;overflow:auto;padding:20px}
+ #app.pseudo-fs{position:fixed;inset:0;z-index:9999;max-width:100%;width:100%;height:100%;border:none;border-radius:0;overflow:auto;background:#fffef7;padding:20px}
+ #fsBtn{background:#fff;color:#111;border:2px solid #222;padding:8px 12px;font-size:14px}
+ /* Pulsante Esci - fuori da #app, così Sites non lo taglia */
+ #exitFsBtn{display:none;position:fixed;top:12px;right:12px;z-index:99999;background:#dc2626;color:#fff;border:3px solid #fff;padding:14px 20px;font-size:18px;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.4);cursor:pointer}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/vexflow@4.2.2/build/cjs/vexflow.js"></script>
+</head>
+<body>
+<div id="app">
+<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+<h3 style="margin:0">🎼 Completa la battuta</h3>
+<div style="display:flex;gap:8px;align-items:center">
+<button id="fsBtn" onclick="toggleFS()">⛶ Schermo intero</button>
+<select id="timeSelector" style="padding:6px;border-radius:8px;font-weight:bold"><option value="240">4 min</option><option value="120" selected>2 min</option><option value="60">60 sec</option></select>
+<div id="timer" style="font-size:22px;font-weight:bold;background:#222;color:#fff;padding:6px 14px;border-radius:8px">120s</div>
+</div></div>
+<input id="nomeStudente" placeholder="Nome e Cognome" style="padding:8px;border-radius:6px;border:1px solid #ccc;width:100%;margin:10px 0;box-sizing:border-box">
+<div id="staff"></div>
+<div id="infoBattuta" style="text-align:center;font-size:13px;color:#666;margin-top:6px"></div>
+<div id="restGrid"></div>
+<div style="display:flex;gap:10px"><button style="flex:1;background:#ffcc00" onclick="start()">▶️ Inizia</button><button style="flex:1;background:#111;color:white" onclick="check()">Verifica</button></div>
+<div id="result" style="margin-top:15px;font-weight:bold"></div>
+</div>
+<button id="exitFsBtn" onclick="toggleFS()">✕ Esci</button>
+<script>
+const {Renderer,Stave,StaveNote,Voice,Formatter,Dot,Beam,Annotation}=Vex.Flow;
+const RESTS=[{label:"4/4",name:"Intera",ticks:16,vex:{dur:"w",dots:0}},{label:"3/4",name:"Min.punt.",ticks:12,vex:{dur:"h",dots:1}},{label:"2/4",name:"Minima",ticks:8,vex:{dur:"h",dots:0}},{label:"3/8",name:"Semim.punt.",ticks:6,vex:{dur:"q",dots:1}},{label:"1/4",name:"Semiminima",ticks:4,vex:{dur:"q",dots:0}},{label:"3/16",name:"Croma punt.",ticks:3,vex:{dur:"8",dots:1}},{label:"1/8",name:"Croma",ticks:2,vex:{dur:"8",dots:0}},{label:"1/16",name:"Semicroma",ticks:1,vex:{dur:"16",dots:0}}];
+const TIME_SIGS=[{sym:"2/4",num:2,beat:4,total:8},{sym:"3/4",num:3,beat:4,total:12},{sym:"4/4",num:4,beat:4,total:16},{sym:"5/4",num:5,beat:4,total:20},{sym:"3/8",num:3,beat:8,total:6},{sym:"6/8",num:6,beat:8,total:12},{sym:"9/8",num:9,beat:8,total:18}];
+let current=null,selected=null,timerInt,timeLeft=120,inizio=Date.now();
+const PITCHES=["c/4","d/4","e/4","f/4","g/4","a/4","b/4","c/5","d/5"];
+function makeNote(p,t,isRest){let n=new StaveNote({keys:isRest?["b/4"]:[p],duration:t.dur+(isRest?"r":"")}); if(t.dots>0) n.addModifier(new Dot()); n._dotsCount=t.dots; return n;}
+function makePlaceholder(t){let n=new StaveNote({keys:["b/4"],duration:t.dur}); n.setStyle({fillStyle:"rgba(0,0,0,0.06)",strokeStyle:"rgba(0,0,0,0.06)"}); let a=new Annotation("?"); a.setFont("Arial",42,"bold"); a.setStyle({fillStyle:"#e60000",strokeStyle:"#e60000"}); a.setVerticalJustification(Annotation.VerticalJustify.CENTER); n.addModifier(a,0); if(t.dots>0) n.addModifier(new Dot()); n._dotsCount=t.dots; return n;}
+function generate(){let ts=TIME_SIGS[Math.floor(Math.random()*TIME_SIGS.length)]; let feas=RESTS.filter(r=>r.ticks<=ts.total-1); let miss=feas[Math.floor(Math.random()*feas.length)]; let rem=ts.total-miss.ticks,notes=[]; while(rem>0){let cand=RESTS.filter(r=>r.ticks<=rem && r.ticks<=4); if(cand.length==0) cand=RESTS.filter(r=>r.ticks<=rem); let pick=cand[Math.floor(Math.random()*cand.length)]; notes.push({pitch:PITCHES[Math.floor(Math.random()*PITCHES.length)],vex:pick.vex,ticks:pick.ticks}); rem-=pick.ticks; if(notes.length>20) break;} let pos=Math.floor(Math.random()*(notes.length+1)); return {ts,missing:miss,notes,pos};}
+function draw(isComplete){const div=document.getElementById("staff"); div.innerHTML=""; const ren=new Renderer(div,Renderer.Backends.SVG); ren.resize(780,160); const ctx=ren.getContext(); const stave=new Stave(10,20,760); stave.addClef("treble").addTimeSignature(current.ts.sym).setContext(ctx).draw(); let before=current.notes.slice(0,current.pos).map(n=>makeNote(n.pitch,n.vex,false)); let after=current.notes.slice(current.pos).map(n=>makeNote(n.pitch,n.vex,false)); let middle=isComplete?makeNote("b/4",current.missing.vex,true):makePlaceholder(current.missing.vex); let beams=[]; function createBeams(arr){let g=[]; arr.forEach(n=>{let isRest=n.isRest&&n.isRest(); let dots=n._dotsCount||0; let dur=n.getDuration(); let beamable=!isRest&&dots===0&&(dur==="8"||dur==="16"); if(beamable){g.push(n);} else {if(g.length>1) beams.push(new Beam(g)); g=[];}}); if(g.length>1) beams.push(new Beam(g));} createBeams(before); createBeams(after); let all=[...before,middle,...after]; let voice=new Voice({num_beats:current.ts.num,beat_value:current.ts.beat}); voice.setMode(Voice.Mode.SOFT); voice.addTickables(all); new Formatter().joinVoices([voice]).formatToStave([voice],stave); voice.draw(ctx,stave); beams.forEach(b=>b.setContext(ctx).draw());}
+function buildGrid(){const g=document.getElementById("restGrid"); g.innerHTML=""; RESTS.forEach(r=>{let b=document.createElement("div"); b.className="restBtn"; b.id="rest-"+r.label; b.innerHTML=`${r.label}<small>${r.name}</small>`; b.onclick=()=>{selected=r; document.querySelectorAll(".restBtn").forEach(x=>x.classList.remove("sel")); b.classList.add("sel");}; g.appendChild(b);});}
+function start(){inizio=Date.now(); current=generate(); selected=null; buildGrid(); draw(false); document.getElementById("infoBattuta").textContent=`Tempo: ${current.ts.sym} - Pausa mancante in posizione ${current.pos+1}`; document.getElementById("result").textContent=""; timeLeft=parseInt(document.getElementById("timeSelector").value); document.getElementById("timer").textContent=timeLeft+"s"; clearInterval(timerInt); timerInt=setInterval(()=>{timeLeft--; document.getElementById("timer").textContent=timeLeft+"s"; if(timeLeft<=0){clearInterval(timerInt); check(true);}},1000);}
+function check(ft=false){let nome=document.getElementById("nomeStudente").value.trim(); if(!nome){alert("Scrivi nome!");return;} if(!current){alert("Premi Inizia");return;} if(!selected&&!ft){alert("Seleziona una pausa!");return;} let ok=selected && selected.ticks===current.missing.ticks ? 1:0; document.querySelectorAll(".restBtn").forEach(b=>b.classList.remove("ok","ko")); if(selected) document.getElementById("rest-"+selected.label).classList.add(ok?"ok":"ko"); document.getElementById("rest-"+current.missing.label).classList.add("ok"); draw(true); let tempo=Math.round((Date.now()-inizio)/1000); document.getElementById("result").textContent=(ok?`✅ Era proprio ${current.missing.label}`:`❌ Era ${current.missing.label}`)+(ft?" ⏰ Tempo scaduto!":""); google.script.run.salvaRisultato(nome,ok,1-ok,tempo,current.ts.sym,current.missing.label,selected?selected.label:"nessuna"); clearInterval(timerInt);}
+buildGrid(); current=generate(); draw(false);
+
+// Schermo intero - stessa logica di Battute e valori, senza Solo pentagramma
+function showExitBtn(show){
+  document.getElementById('exitFsBtn').style.display = show ? 'block' : 'none';
+}
+function toggleFS(){
+  const app = document.getElementById('app');
+  const btn = document.getElementById('fsBtn');
+  if(document.fullscreenElement || app.classList.contains('pseudo-fs')){
+    if(document.fullscreenElement) document.exitFullscreen();
+    app.classList.remove('pseudo-fs');
+    btn.textContent = '⛶ Schermo intero';
+    showExitBtn(false);
+    return;
+  }
+  showExitBtn(true);
+  btn.textContent = '✕ Esci';
+  if(app.requestFullscreen){
+    app.requestFullscreen().catch(()=>{ app.classList.add('pseudo-fs'); });
+  } else { app.classList.add('pseudo-fs'); }
+  setTimeout(()=>{
+    if(!document.fullscreenElement && !app.classList.contains('pseudo-fs')){
+      app.classList.add('pseudo-fs');
+    }
+  }, 300);
+}
+document.addEventListener('fullscreenchange', ()=>{
+  if(!document.fullscreenElement){
+    document.getElementById('app').classList.remove('pseudo-fs');
+    document.getElementById('fsBtn').textContent = '⛶ Schermo intero';
+    showExitBtn(false);
+  }
+});
+document.addEventListener('keydown', (e)=>{
+  if(e.key === 'Escape'){
+    const app = document.getElementById('app');
+    if(app.classList.contains('pseudo-fs')){ toggleFS(); }
+  }
+});
+</script>
+</body>
+</html>
